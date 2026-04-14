@@ -1,0 +1,28 @@
+source: ./photos
+output: ./sorted
+operation: copy
+categories:
+  - nature
+  - birds
+  - street photography
+  - family
+  - portraits
+  - architecture
+  - food
+  - events
+
+ollama:
+  url: http://localhost:11434
+  model: gemma3
+  timeout_seconds: 120
+
+classification_prompt: |
+  You are a photo classification model.
+  Choose exactly one category from this list:
+  {categories}
+
+  Respond with only the category name.
+
+preprocessing:
+  max_side: 1024
+  jpeg_quality: 85
