@@ -106,9 +106,7 @@ def preprocess_image_for_inference(
     original_size = image_path.stat().st_size
 
     with Image.open(image_path) as img:
-        if img.mode in {"RGBA", "P"}:
-            img = img.convert("RGB")
-        elif img.mode != "RGB":
+        if img.mode != "RGB":
             img = img.convert("RGB")
 
         width, height = img.size
@@ -201,14 +199,14 @@ def process_images(
     source.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
 
-    valid_categories = list(dict.fromkeys(categories + ["uncategorized"]))
-    for category in valid_categories:
+    output_categories = list(dict.fromkeys(categories + ["uncategorized"]))
+    for category in output_categories:
         (output / category).mkdir(parents=True, exist_ok=True)
 
     errors_logger = _configure_error_logger(output / "errors.log")
 
     images = list_images(source)
-    counts: dict[str, int] = {category: 0 for category in valid_categories}
+    counts: dict[str, int] = {category: 0 for category in output_categories}
     total_original_size = 0
     total_payload_size = 0
 
@@ -241,7 +239,7 @@ def process_images(
         total_original_size += original_size
         total_payload_size += payload_size
 
-        if category not in valid_categories:
+        if category not in output_categories:
             category = "uncategorized"
 
         destination = output / category / image_path.name
