@@ -173,7 +173,7 @@ def classify_with_ollama(
 
 
 def _configure_error_logger(log_file: Path) -> logging.Logger:
-    logger = logging.getLogger(f"pipeline_errors_{log_file}")
+    logger = logging.getLogger("pipeline_errors")
     logger.setLevel(logging.ERROR)
     logger.handlers.clear()
     handler = logging.FileHandler(log_file, encoding="utf-8")

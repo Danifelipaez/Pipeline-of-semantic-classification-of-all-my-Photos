@@ -1,6 +1,7 @@
 import base64
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from pipeline import extract_category, preprocess_image_for_inference, process_images
@@ -35,7 +36,9 @@ def test_extract_category_with_sentence() -> None:
     assert extract_category("unknown", categories) == "uncategorized"
 
 
-def test_process_images_dry_run_keeps_source_files(tmp_path: Path, monkeypatch) -> None:
+def test_process_images_dry_run_keeps_source_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = tmp_path / "source"
     output = tmp_path / "output"
     source.mkdir()
@@ -62,3 +65,37 @@ def test_process_images_dry_run_keeps_source_files(tmp_path: Path, monkeypatch) 
     assert image_path.exists()
     assert not (output / "family" / "img.jpg").exists()
     assert summary.counts["family"] == 1
+
+
+def test_process_images_classification_failure_goes_uncategorized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+
+    image_path = source / "img.jpg"
+    _create_image(image_path, mode="RGB", size=(120, 120))
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("classification failed")
+
+    monkeypatch.setattr("pipeline.classify_with_ollama", _raise)
+
+    summary = process_images(
+        source=source,
+        output=output,
+        categories=["family"],
+        operation="copy",
+        max_side=1024,
+        jpeg_quality=85,
+        prompt_template="{categories}",
+        ollama_url="http://localhost:11434",
+        model="gemma3",
+        timeout_seconds=2,
+        dry_run=False,
+    )
+
+    assert (output / "uncategorized" / "img.jpg").exists()
+    assert summary.counts["uncategorized"] == 1
+    assert "classification failed" in (output / "errors.log").read_text(encoding="utf-8")
