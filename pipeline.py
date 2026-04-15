@@ -32,13 +32,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     ],
     "ollama": {
         "url": "http://localhost:11434",
-        "model": "gemma3",
+        "model": "gemma4",
         "timeout_seconds": 120,
     },
     "classification_prompt": (
-        "You are a photo classification model. "
-        "Choose exactly one category from this list: {categories}. "
-        "Respond with only the category name."
+        "You are an advanced image classification model specialized in semantic pattern recognition. "
+        "Analyze the image carefully and choose exactly one category from this list: {categories}. "
+        "Only respond with the category name. "
+        "If you are not at least 85% confident, respond with 'uncategorized'. "
+        "If the image contains multiple patterns, choose the most prominent one. "
+        "Be strict and avoid guessing. "
+        "Confidence: Output the category name, then a pipe '|', then the confidence as a percentage (e.g., 'nature|92')."
     ),
     "preprocessing": {
         "max_side": 1024,
@@ -91,7 +95,7 @@ def list_images(source: Path) -> list[Path]:
     return sorted(
         [
             p
-            for p in source.iterdir()
+            for p in source.glob("**/*")
             if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
         ]
     )
@@ -124,26 +128,40 @@ def preprocess_image_for_inference(
     return payload_b64, original_size, len(payload_bytes)
 
 
-def extract_category(response_text: str, categories: list[str]) -> str:
+def extract_category(response_text: str, categories: list[str], min_confidence: float = 0.85) -> str:
+    """
+    Extrae la categoría y la confianza del texto de respuesta. Si la confianza es menor al umbral, retorna 'uncategorized'.
+    """
+    # Buscar formato: categoria|porcentaje
+    match = re.match(r"([a-zA-Z0-9 _-]+)\s*\|\s*(\d{1,3})", response_text.strip())
+    if match:
+        cat_raw, conf_raw = match.groups()
+        try:
+            confidence = int(conf_raw) / 100.0
+        except Exception:
+            confidence = 0.0
+        normalized = cat_raw.lower().strip()
+        normalized_categories = {re.sub(r"\s+", " ", c.lower().strip()): c for c in categories}
+        if normalized in normalized_categories and confidence >= min_confidence:
+            return normalized_categories[normalized]
+        else:
+            return "uncategorized"
+
+    # Fallback: comportamiento anterior
     normalized_response = response_text.lower().strip()
     normalized_response = re.sub(r"[^a-z0-9\s]", " ", normalized_response)
     normalized_response = re.sub(r"\s+", " ", normalized_response).strip()
-
     normalized_categories = {re.sub(r"\s+", " ", c.lower().strip()): c for c in categories}
-
     if normalized_response in normalized_categories:
         return normalized_categories[normalized_response]
-
     for normalized, original in normalized_categories.items():
         pattern = rf"\b{re.escape(normalized)}\b"
         if re.search(pattern, normalized_response):
             return original
-
     first_word = normalized_response.split(" ")[0] if normalized_response else ""
     for normalized, original in normalized_categories.items():
         if normalized.split(" ")[0] == first_word and first_word:
             return original
-
     return "uncategorized"
 
 
@@ -154,9 +172,10 @@ def classify_with_ollama(
     ollama_url: str,
     model: str,
     timeout_seconds: int,
-) -> str:
+    min_confidence: float = 0.85,
+) -> tuple[str, str]:
+    """Returns (category, raw_response) tuple."""
     prompt = prompt_template.format(categories=", ".join(categories))
-
     response = requests.post(
         f"{ollama_url.rstrip('/')}/api/generate",
         json={
@@ -169,7 +188,8 @@ def classify_with_ollama(
     )
     response.raise_for_status()
     output = response.json().get("response", "")
-    return extract_category(str(output), categories)
+    category = extract_category(str(output), categories, min_confidence=min_confidence)
+    return category, str(output).strip()
 
 
 def _configure_error_logger(log_file: Path) -> logging.Logger:
@@ -181,6 +201,19 @@ def _configure_error_logger(log_file: Path) -> logging.Logger:
     logger.addHandler(handler)
     return logger
 
+
+def postprocess_category(category: str, image_path: Path, categories: list[str]) -> str:
+    """
+    Postproceso simple: si la categoría es 'uncategorized', intentar heurística por nombre de archivo.
+    """
+    if category != "uncategorized":
+        return category
+    # Ejemplo: si el nombre del archivo contiene una categoría, usarla
+    filename = image_path.stem.lower()
+    for cat in categories:
+        if cat.lower() in filename:
+            return cat
+    return category
 
 def process_images(
     *,
@@ -195,6 +228,7 @@ def process_images(
     model: str,
     timeout_seconds: int,
     dry_run: bool,
+    min_confidence: float = 0.85,
 ) -> Summary:
     source.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -212,8 +246,10 @@ def process_images(
 
     started = time.perf_counter()
 
+
     for image_path in images:
         category = "uncategorized"
+        raw_response = ""
         try:
             payload_b64, original_size, payload_size = preprocess_image_for_inference(
                 image_path,
@@ -221,13 +257,14 @@ def process_images(
                 jpeg_quality=jpeg_quality,
             )
             try:
-                category = classify_with_ollama(
+                category, raw_response = classify_with_ollama(
                     payload_b64,
                     categories,
                     prompt_template,
                     ollama_url,
                     model,
                     timeout_seconds,
+                    min_confidence=min_confidence,
                 )
             except Exception as exc:
                 errors_logger.error("Failed to classify %s: %s", image_path, exc)
@@ -239,6 +276,9 @@ def process_images(
         total_original_size += original_size
         total_payload_size += payload_size
 
+        # Postproceso para mejorar la calidad de la clasificación
+        category = postprocess_category(category, image_path, categories)
+
         if category not in output_categories:
             category = "uncategorized"
 
@@ -246,6 +286,7 @@ def process_images(
         print(
             f"{image_path.name} | original_size={original_size} bytes "
             f"| payload_size={payload_size} bytes | category={category} "
+            f"| gemma4_response={raw_response} "
             f"| destination={destination}"
         )
 

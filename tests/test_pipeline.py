@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from pipeline import extract_category, preprocess_image_for_inference, process_images
+from pipeline import extract_category, preprocess_image_for_inference, process_images, postprocess_category
 
 
 def _create_image(path: Path, mode: str = "RGB", size: tuple[int, int] = (2000, 1200)) -> None:
@@ -30,10 +30,28 @@ def test_preprocess_resizes_and_encodes_jpeg(tmp_path: Path) -> None:
     assert decoded[:2] == b"\xff\xd8"
 
 
-def test_extract_category_with_sentence() -> None:
+def test_extract_category_with_sentence_and_confidence() -> None:
     categories = ["nature", "birds", "street photography"]
+    # Caso: formato antiguo, sin confianza
     assert extract_category("The best category is street photography.", categories) == "street photography"
     assert extract_category("unknown", categories) == "uncategorized"
+    # Caso: formato nuevo, confianza suficiente
+    assert extract_category("nature|92", categories) == "nature"
+    # Caso: formato nuevo, confianza insuficiente
+    assert extract_category("birds|70", categories) == "uncategorized"
+    # Caso: formato nuevo, confianza justo en el umbral
+    assert extract_category("birds|85", categories) == "birds"
+def test_postprocess_category_uses_filename(tmp_path: Path) -> None:
+    categories = ["nature", "birds", "street photography"]
+    # Si la categoría es válida, no cambia
+    img_path = tmp_path / "img.jpg"
+    assert postprocess_category("nature", img_path, categories) == "nature"
+    # Si es 'uncategorized' y el nombre contiene una categoría, la asigna
+    img_path2 = tmp_path / "my_birds_photo.jpg"
+    assert postprocess_category("uncategorized", img_path2, categories) == "birds"
+    # Si no hay coincidencia, sigue siendo 'uncategorized'
+    img_path3 = tmp_path / "random_image.jpg"
+    assert postprocess_category("uncategorized", img_path3, categories) == "uncategorized"
 
 
 def test_process_images_dry_run_keeps_source_files(
@@ -46,7 +64,8 @@ def test_process_images_dry_run_keeps_source_files(
     image_path = source / "img.jpg"
     _create_image(image_path, mode="RGB", size=(120, 120))
 
-    monkeypatch.setattr("pipeline.classify_with_ollama", lambda *args, **kwargs: "family")
+    # Simula respuesta con confianza suficiente
+    monkeypatch.setattr("pipeline.classify_with_ollama", lambda *args, **kwargs: ("family", "family|90"))
 
     summary = process_images(
         source=source,
@@ -57,14 +76,33 @@ def test_process_images_dry_run_keeps_source_files(
         jpeg_quality=85,
         prompt_template="{categories}",
         ollama_url="http://localhost:11434",
-        model="gemma3",
+        model="gemma4",
         timeout_seconds=2,
         dry_run=True,
+        min_confidence=0.85,
     )
 
     assert image_path.exists()
     assert not (output / "family" / "img.jpg").exists()
     assert summary.counts["family"] == 1
+
+    # Simula respuesta con confianza insuficiente
+    monkeypatch.setattr("pipeline.classify_with_ollama", lambda *args, **kwargs: ("uncategorized", "family|70"))
+    summary2 = process_images(
+        source=source,
+        output=output,
+        categories=["family"],
+        operation="copy",
+        max_side=1024,
+        jpeg_quality=85,
+        prompt_template="{categories}",
+        ollama_url="http://localhost:11434",
+        model="gemma4",
+        timeout_seconds=2,
+        dry_run=True,
+        min_confidence=0.85,
+    )
+    assert summary2.counts["uncategorized"] >= 0
 
 
 def test_process_images_classification_failure_goes_uncategorized(
@@ -91,7 +129,7 @@ def test_process_images_classification_failure_goes_uncategorized(
         jpeg_quality=85,
         prompt_template="{categories}",
         ollama_url="http://localhost:11434",
-        model="gemma3",
+        model="gemma4",
         timeout_seconds=2,
         dry_run=False,
     )

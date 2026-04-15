@@ -1,5 +1,5 @@
-source: ./photos
-output: ./sorted
+source: D:\Camara\a6400\
+output: D:\Camara\OrganizacionSemantica
 operation: copy
 categories:
   - nature
@@ -13,15 +13,15 @@ categories:
 
 ollama:
   url: http://localhost:11434
-  model: gemma3
+  model: gemma4
   timeout_seconds: 120
 
 classification_prompt: |
-  You are a photo classification model.
-  Choose exactly one category from this list:
-  {categories}
-
-  Respond with only the category name.
+  Describe brevemente la imagen y luego, usando esa descripción, elige 
+  exactamente una categoría de la lista: 
+  {categories} 
+  
+  Responde solo con el nombre de la categoría.
 
 preprocessing:
   max_side: 1024
