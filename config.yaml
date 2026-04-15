@@ -10,6 +10,7 @@ categories:
   - architecture
   - food
   - events
+  - uncategorized
 
 ollama:
   url: http://localhost:11434
@@ -17,11 +18,16 @@ ollama:
   timeout_seconds: 120
 
 classification_prompt: |
-  Describe brevemente la imagen y luego, usando esa descripción, elige 
-  exactamente una categoría de la lista: 
-  {categories} 
-  
-  Responde solo con el nombre de la categoría.
+  Describe brevemente la imagen y luego, usando esa descripción, elige
+  exactamente una categoría de la lista:
+  {categories}
+
+  Tu salida debe incluir categoría y confianza.
+
+classification:
+  min_confidence: 0.85
+  fallback_category: uncategorized
+  require_confidence_format: true
 
 preprocessing:
   max_side: 1024

@@ -27,11 +27,16 @@ def main(
         ollama_url=str(loaded["ollama"]["url"]),
         model=str(loaded["ollama"]["model"]),
         timeout_seconds=int(loaded["ollama"]["timeout_seconds"]),
+        min_confidence=float(loaded["classification"]["min_confidence"]),
+        fallback_category=str(loaded["classification"]["fallback_category"]),
+        require_confidence_format=bool(loaded["classification"]["require_confidence_format"]),
         dry_run=dry_run,
+        history_log_path=Path("history.log"),
     )
 
     typer.echo("\nSummary:")
     typer.echo(f"Total images: {summary.total_images}")
+    typer.echo(f"Skipped (already in history): {summary.skipped_images}")
     for category, count in summary.counts.items():
         typer.echo(f"  {category}: {count}")
     typer.echo(f"Total processing time (s): {summary.total_seconds:.2f}")
