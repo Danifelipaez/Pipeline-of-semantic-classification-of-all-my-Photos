@@ -15,20 +15,23 @@ categories:
 ollama:
   url: http://localhost:11434
   model: gemma4
-  timeout_seconds: 120
+  timeout_seconds: 180
 
 classification_prompt: |
   Describe brevemente la imagen y luego, usando esa descripción, elige
   exactamente una categoría de la lista:
   {categories}
-
-  Tu salida debe incluir categoría y confianza.
+  y calcula un porcentaje de confianza (0-100) para esa categoría, basado en la descripción.
+  Responde en el formato: categoria|porcentaje (ejemplo: "nature|98")
 
 classification:
   min_confidence: 0.85
   fallback_category: uncategorized
   require_confidence_format: true
+  workers_mode: auto
+  num_workers: 2
+  max_workers_cap: 6
 
 preprocessing:
-  max_side: 1024
-  jpeg_quality: 85
+  max_side: 768
+  jpeg_quality: 80

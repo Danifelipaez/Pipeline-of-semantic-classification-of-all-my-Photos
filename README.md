@@ -1,107 +1,62 @@
-# Pipeline-of-semantic-classification-of-all-my-Photos
+# Pipeline de Clasificación Semántica de Fotos
 
-Local photo organization pipeline using Gemma 3 through Ollama.
+Pipeline local para organizar fotos por categoría semántica usando Ollama y un modelo de visión.
 
-## Features
+## Qué hace
 
-- Classifies `.jpg`, `.jpeg`, `.png`, and `.webp` images from a source folder
-- Uses Ollama local API (`http://localhost:11434`) with `gemma3`
-- Sorts photos into category folders (or `uncategorized`)
-- Logs failed requests to `errors.log`
-- Keeps originals untouched during inference (in-memory preprocessing only)
-- Supports copy or move modes
-- Supports `--dry-run`
-- Prints summary with category counts, total time, and average payload vs original size
+- Clasifica imágenes `.jpg`, `.jpeg`, `.png` y `.webp`.
+- Preprocesa cada imagen en memoria sin modificar el archivo original durante la inferencia.
+- Copia o mueve la imagen al directorio de salida según la categoría final.
+- Registra errores en `errors.log` y evita reprocesar imágenes ya vistas mediante `history.log`.
 
-## Requirements
+## Inicio rápido
+
+1. Crea y activa el entorno Python.
+2. Instala dependencias con `pip install -r requirements.txt`.
+3. Inicia Ollama en `http://localhost:11434`.
+4. Ejecuta `python main.py --source ./photos --output ./sorted`.
+
+## Requisitos
 
 - Python 3.11+
-- WSL (Ubuntu recommended)
-- Ollama installed in WSL
+- Ollama local en ejecución
+- Modelo de visión descargado en Ollama
 
-## WSL + Ollama setup
+## Configuración principal
 
-1. Install Ollama in WSL:
-   ```bash
-   curl -fsSL https://ollama.com/install.sh | sh
-   ```
-2. Start Ollama:
-   ```bash
-   ollama serve
-   ```
-3. Pull Gemma 3:
-   ```bash
-   ollama pull gemma3
-   ```
+El contrato canónico vive en [docs/reference/configuration.md](docs/reference/configuration.md).
 
-## Python setup
+Valores relevantes por defecto:
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+- `operation`: `copy`
+- `ollama.model`: `gemma4`
+- `preprocessing.max_side`: `1024`
+- `preprocessing.jpeg_quality`: `85`
+- `classification.min_confidence`: `0.85`
+- `classification.fallback_category`: `uncategorized`
+- `classification.require_confidence_format`: `true`
 
-## Configuration
+## Documentación técnica
 
-Edit `config.yaml` to customize:
+- [Arquitectura del pipeline](docs/reference/architecture.md)
+- [Configuración canónica](docs/reference/configuration.md)
+- [Operación y troubleshooting](docs/operations/troubleshooting.md)
+- [Historial de optimización](docs/archive/optimization-summary.md)
 
-- `categories`
-- `source`
-- `output`
-- `operation` (`copy` or `move`)
-- preprocessing (`max_side`, `jpeg_quality`)
-- Ollama URL/model/timeout
-- classification behavior (`classification.min_confidence`, `classification.fallback_category`, `classification.require_confidence_format`)
-
-## Run
+## Ejecución
 
 ```bash
 python main.py --source ./photos --output ./sorted
 ```
 
-Dry run:
+Modo de prueba:
 
 ```bash
 python main.py --source ./photos --output ./sorted --dry-run
 ```
 
-The pipeline preprocesses each image in memory only:
+## Notas
 
-- converts temporary inference copy to RGB
-- resizes longest side to max 1024 (default) with `Image.LANCZOS`
-- encodes temporary copy as JPEG (quality 85 by default)
-- sends base64 payload to Ollama
-
-Original files are only copied or moved after classification.
-
-## Flujo del pipeline
-
-1. **Carga de configuración**
-   - Se lee `config.yaml` para obtener categorías, rutas, parámetros de preprocesado y configuración de Ollama.
-
-2. **Listado de imágenes**
-   - Se buscan todas las imágenes soportadas en la carpeta de origen (recursivo).
-
-3. **Preprocesamiento**
-   - Cada imagen se abre y convierte a RGB si es necesario.
-   - Se redimensiona para que el lado más largo no supere el valor configurado (`max_side`).
-   - Se guarda temporalmente como JPEG con la calidad indicada.
-   - Se codifica la imagen resultante en base64 para enviarla por API.
-
-4. **Clasificación con Gemma4 (Ollama)**
-   - Se construye un prompt con las categorías y se envía la imagen codificada a la API de Ollama.
-   - El pipeline fuerza un contrato de salida estricto: `categoria|confianza`.
-   - Se recibe la respuesta del modelo y se parsea categoría + confianza.
-   - Si la confianza es menor al umbral (por defecto 85%), se marca como `uncategorized`.
-   - **Si Ollama no responde o hay timeout/conexión rechazada:** se muestra en terminal "Sin respuesta de Ollama, abre tu terminal WSL" y la foto NO se registra en history.log (permitiendo reintentos posteriores).
-
-5. **Postproceso**
-   - Si la imagen fue clasificada como `uncategorized`, se intenta reasignar una categoría si el nombre del archivo contiene alguna palabra clave de las categorías.
-
-6. **Organización de archivos**
-   - Según la categoría final, la imagen se copia o mueve a la carpeta correspondiente en el destino.
-   - Si ocurre un error, se registra en `errors.log`.
-
-7. **Resumen**
-   - Al finalizar, se imprime un resumen con el número de imágenes por categoría, tiempo total y tamaños promedio.
+- La clasificación puede usar paralelismo configurable.
+- La confianza baja o una respuesta inválida caen en `uncategorized`.
+- La heurística de nombre de archivo solo actúa como postproceso.

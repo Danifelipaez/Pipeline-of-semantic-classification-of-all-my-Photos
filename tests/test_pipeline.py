@@ -1,10 +1,21 @@
 import base64
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from pipeline import classify_with_ollama, extract_category, OllamaError, preprocess_image_for_inference, process_images, postprocess_category
+from pipeline import (
+    OllamaError,
+    classify_with_ollama,
+    extract_category,
+    load_config,
+    preprocess_image_for_inference,
+    process_images,
+    resolve_classification_workers,
+    postprocess_category,
+)
 
 
 def _create_image(path: Path, mode: str = "RGB", size: tuple[int, int] = (2000, 1200)) -> None:
@@ -340,3 +351,157 @@ def test_process_images_does_not_add_to_history_on_ollama_error(
     captured = capsys.readouterr()
     assert "Sin respuesta de Ollama, abre tu terminal WSL" in captured.out
     assert "error=ollama" in captured.out
+
+
+def test_load_config_defaults_classification_workers(tmp_path: Path) -> None:
+    config = load_config(tmp_path / "missing.yaml")
+    classification = config["classification"]
+
+    assert classification["workers_mode"] == "auto"
+    assert classification["num_workers"] == 4
+    assert classification["max_workers_cap"] == 6
+
+
+def test_load_config_rejects_invalid_workers_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+classification:
+  workers_mode: invalid
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="classification.workers_mode"):
+        load_config(config_path)
+
+
+def test_resolve_classification_workers_manual_respects_cap() -> None:
+    workers = resolve_classification_workers(
+        {
+            "workers_mode": "manual",
+            "num_workers": 10,
+            "max_workers_cap": 3,
+        }
+    )
+    assert workers == 3
+
+
+def test_process_images_parallel_classification_uses_multiple_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+
+    for idx in range(6):
+        _create_image(source / f"img_{idx}.jpg", mode="RGB", size=(120, 120))
+
+    worker_thread_ids: set[int] = set()
+    ids_lock = threading.Lock()
+
+    def _fake_classify(*args, **kwargs):
+        time.sleep(0.05)
+        thread_id = threading.get_ident()
+        with ids_lock:
+            worker_thread_ids.add(thread_id)
+        return "family", "family|95"
+
+    monkeypatch.setattr("pipeline.classify_with_ollama", _fake_classify)
+
+    summary = process_images(
+        source=source,
+        output=output,
+        categories=["family"],
+        operation="copy",
+        max_side=1024,
+        jpeg_quality=85,
+        prompt_template="{categories}",
+        ollama_url="http://localhost:11434",
+        model="gemma4",
+        timeout_seconds=2,
+        dry_run=True,
+        classification_workers=3,
+    )
+
+    assert summary.total_images == 6
+    assert summary.counts["family"] == 6
+    assert len(worker_thread_ids) >= 2
+
+
+def test_process_images_history_uses_relative_paths_to_avoid_name_collisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    history_log = tmp_path / "history.log"
+    (source / "a").mkdir(parents=True)
+    (source / "b").mkdir(parents=True)
+
+    img_a = source / "a" / "same.jpg"
+    img_b = source / "b" / "same.jpg"
+    _create_image(img_a, mode="RGB", size=(120, 120))
+    _create_image(img_b, mode="RGB", size=(120, 120))
+
+    # Mark only one of the duplicated basenames as already processed.
+    history_log.write_text("a/same.jpg | family\n", encoding="utf-8")
+
+    monkeypatch.setattr("pipeline.classify_with_ollama", lambda *args, **kwargs: ("family", "family|95"))
+
+    summary = process_images(
+        source=source,
+        output=output,
+        categories=["family"],
+        operation="copy",
+        max_side=1024,
+        jpeg_quality=85,
+        prompt_template="{categories}",
+        ollama_url="http://localhost:11434",
+        model="gemma4",
+        timeout_seconds=2,
+        dry_run=False,
+        history_log_path=history_log,
+    )
+
+    assert summary.skipped_images == 1
+    assert summary.total_images == 1
+    history_content = history_log.read_text(encoding="utf-8")
+    assert "a/same.jpg | family" in history_content
+    assert "b/same.jpg | family" in history_content
+
+
+def test_process_images_history_keeps_legacy_basename_compatibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    history_log = tmp_path / "history.log"
+    source.mkdir()
+
+    image_path = source / "done.jpg"
+    _create_image(image_path, mode="RGB", size=(120, 120))
+    # Legacy format: basename only.
+    history_log.write_text("done.jpg | family\n", encoding="utf-8")
+
+    def _should_not_be_called(*args, **kwargs):
+        raise AssertionError("classify_with_ollama should not run for files in legacy history")
+
+    monkeypatch.setattr("pipeline.classify_with_ollama", _should_not_be_called)
+
+    summary = process_images(
+        source=source,
+        output=output,
+        categories=["family"],
+        operation="copy",
+        max_side=1024,
+        jpeg_quality=85,
+        prompt_template="{categories}",
+        ollama_url="http://localhost:11434",
+        model="gemma4",
+        timeout_seconds=2,
+        dry_run=False,
+        history_log_path=history_log,
+    )
+
+    assert summary.total_images == 0
+    assert summary.skipped_images == 1
