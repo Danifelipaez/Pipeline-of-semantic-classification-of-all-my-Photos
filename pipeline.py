@@ -145,7 +145,7 @@ def _extract_json_payload(response_text: str) -> dict[str, Any] | None:
     end = raw.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None
-    candidate = raw[start : end + 1]
+    candidate = raw[start:end + 1]
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
@@ -276,6 +276,10 @@ def _append_description_entry(description_log_path: Path, record: dict[str, Any]
         history_file.write(json.dumps(record, ensure_ascii=False))
         history_file.write("\n")
 
+
+def _description_keys(relative_path: Path, filename: str) -> tuple[str, str]:
+    return str(relative_path).casefold(), filename.casefold()
+
 def process_images(
     *,
     source: Path,
@@ -310,8 +314,7 @@ def process_images(
 
     for image_path in images:
         relative_path = image_path.relative_to(source)
-        image_key = str(relative_path).casefold()
-        filename_key = image_path.name.casefold()
+        image_key, filename_key = _description_keys(relative_path, image_path.name)
         if image_key in description_index or filename_key in description_index:
             skipped_images += 1
             print(
@@ -392,8 +395,7 @@ def process_images(
                     "raw_response": raw_response,
                 },
             )
-            description_index.add(image_key)
-            description_index.add(filename_key)
+            description_index.update({image_key, filename_key})
 
     total_seconds = time.perf_counter() - started
     total_images = processed_images
