@@ -143,7 +143,7 @@ def _extract_json_payload(response_text: str) -> dict[str, Any] | None:
         pass
     start = raw.find("{")
     end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    if start == -1 or end == -1 or end < start:
         return None
     end_inclusive = end + 1
     candidate = raw[start:end_inclusive]
@@ -273,9 +273,9 @@ def _load_description_index(description_log_path: Path) -> set[str]:
 
 def _append_description_entry(description_log_path: Path, record: dict[str, Any]) -> None:
     description_log_path.parent.mkdir(parents=True, exist_ok=True)
-    with description_log_path.open("a", encoding="utf-8") as history_file:
-        history_file.write(json.dumps(record, ensure_ascii=False))
-        history_file.write("\n")
+    with description_log_path.open("a", encoding="utf-8") as description_file:
+        description_file.write(json.dumps(record, ensure_ascii=False))
+        description_file.write("\n")
 
 
 def _description_keys(relative_path: Path, filename: str) -> tuple[str, str]:
