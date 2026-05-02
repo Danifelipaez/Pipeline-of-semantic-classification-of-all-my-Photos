@@ -1,33 +1,23 @@
 source: D:\Camara\a6400\
 output: D:\Camara\OrganizacionSemantica
 operation: copy
-categories:
-  - nature
-  - birds
-  - street photography
-  - family
-  - portraits
-  - architecture
-  - food
-  - events
-  - uncategorized
 
 ollama:
   url: http://localhost:11434
   model: gemma4
   timeout_seconds: 120
 
-classification_prompt: |
-  Describe brevemente la imagen y luego, usando esa descripción, elige
-  exactamente una categoría de la lista:
-  {categories}
+description_prompt: |
+  Genera una descripción semántica breve en español (1-2 frases) y luego
+  una lista corta de etiquetas (5-8 palabras clave).
 
-  Tu salida debe incluir categoría y confianza.
+  Tu salida debe ser JSON con las claves "description" y "tags".
 
-classification:
-  min_confidence: 0.85
-  fallback_category: uncategorized
-  require_confidence_format: true
+description:
+  fallback_text: descripcion no disponible
+  require_json: true
+
+description_output: descriptions.jsonl
 
 preprocessing:
   max_side: 1024
