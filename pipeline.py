@@ -145,7 +145,8 @@ def _extract_json_payload(response_text: str) -> dict[str, Any] | None:
     end = raw.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None
-    candidate = raw[start:end + 1]
+    end_inclusive = end + 1
+    candidate = raw[start:end_inclusive]
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
@@ -248,8 +249,8 @@ def _load_description_index(description_log_path: Path) -> set[str]:
     if not description_log_path.exists():
         return description_index
 
-    with description_log_path.open("r", encoding="utf-8") as history_file:
-        for raw_line in history_file:
+    with description_log_path.open("r", encoding="utf-8") as description_file:
+        for raw_line in description_file:
             line = raw_line.strip()
             if not line:
                 continue
@@ -278,6 +279,7 @@ def _append_description_entry(description_log_path: Path, record: dict[str, Any]
 
 
 def _description_keys(relative_path: Path, filename: str) -> tuple[str, str]:
+    """Return keys for relative path and filename to support legacy log lookups."""
     return str(relative_path).casefold(), filename.casefold()
 
 def process_images(
