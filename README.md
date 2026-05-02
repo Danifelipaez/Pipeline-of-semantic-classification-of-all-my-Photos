@@ -4,14 +4,14 @@ Local photo organization pipeline using Gemma 3 through Ollama.
 
 ## Features
 
-- Classifies `.jpg`, `.jpeg`, `.png`, and `.webp` images from a source folder
-- Uses Ollama local API (`http://localhost:11434`) with `gemma3`
-- Sorts photos into category folders (or `uncategorized`)
+- Generates semantic descriptions + tags for `.jpg`, `.jpeg`, `.png`, and `.webp` images
+- Uses Ollama local API (`http://localhost:11434`) with `gemma4`
+- Writes a `descriptions.jsonl` log for chatbot-friendly grouping
 - Logs failed requests to `errors.log`
 - Keeps originals untouched during inference (in-memory preprocessing only)
-- Supports copy or move modes
+- Supports copy or move modes (preserving folder structure)
 - Supports `--dry-run`
-- Prints summary with category counts, total time, and average payload vs original size
+- Prints summary with totals, time, and average payload vs original size
 
 ## Requirements
 
@@ -46,13 +46,14 @@ pip install -r requirements.txt
 
 Edit `config.yaml` to customize:
 
-- `categories`
 - `source`
 - `output`
 - `operation` (`copy` or `move`)
 - preprocessing (`max_side`, `jpeg_quality`)
 - Ollama URL/model/timeout
-- classification behavior (`classification.min_confidence`, `classification.fallback_category`, `classification.require_confidence_format`)
+- `description_prompt` (prompt for semantic descriptions)
+- `description.fallback_text` and `description.require_json`
+- `description_output` (file name for the JSONL log)
 
 ## Run
 
@@ -78,7 +79,7 @@ Original files are only copied or moved after classification.
 ## Flujo del pipeline
 
 1. **Carga de configuración**
-   - Se lee `config.yaml` para obtener categorías, rutas, parámetros de preprocesado y configuración de Ollama.
+   - Se lee `config.yaml` para obtener rutas, parámetros de preprocesado, prompt de descripción y configuración de Ollama.
 
 2. **Listado de imágenes**
    - Se buscan todas las imágenes soportadas en la carpeta de origen (recursivo).
@@ -89,19 +90,15 @@ Original files are only copied or moved after classification.
    - Se guarda temporalmente como JPEG con la calidad indicada.
    - Se codifica la imagen resultante en base64 para enviarla por API.
 
-4. **Clasificación con Gemma4 (Ollama)**
-   - Se construye un prompt con las categorías y se envía la imagen codificada a la API de Ollama.
-   - El pipeline fuerza un contrato de salida estricto: `categoria|confianza`.
-   - Se recibe la respuesta del modelo y se parsea categoría + confianza.
-   - Si la confianza es menor al umbral (por defecto 85%), se marca como `uncategorized`.
-   - **Si Ollama no responde o hay timeout/conexión rechazada:** se muestra en terminal "Sin respuesta de Ollama, abre tu terminal WSL" y la foto NO se registra en history.log (permitiendo reintentos posteriores).
+4. **Descripción semántica con Gemma4 (Ollama)**
+   - Se construye un prompt y se envía la imagen codificada a la API de Ollama.
+   - El pipeline fuerza un contrato de salida JSON con `description` y `tags`.
+   - Se guarda la respuesta en `descriptions.jsonl` para uso por un chatbot.
+   - **Si Ollama no responde o hay timeout/conexión rechazada:** se muestra en terminal "Sin respuesta de Ollama, abre tu terminal WSL" y la foto NO se registra en `descriptions.jsonl` (permitiendo reintentos posteriores).
 
-5. **Postproceso**
-   - Si la imagen fue clasificada como `uncategorized`, se intenta reasignar una categoría si el nombre del archivo contiene alguna palabra clave de las categorías.
-
-6. **Organización de archivos**
-   - Según la categoría final, la imagen se copia o mueve a la carpeta correspondiente en el destino.
+5. **Organización de archivos**
+   - La imagen se copia o mueve al destino preservando la estructura de carpetas.
    - Si ocurre un error, se registra en `errors.log`.
 
-7. **Resumen**
-   - Al finalizar, se imprime un resumen con el número de imágenes por categoría, tiempo total y tamaños promedio.
+6. **Resumen**
+   - Al finalizar, se imprime un resumen con totales, tiempo y tamaños promedio.

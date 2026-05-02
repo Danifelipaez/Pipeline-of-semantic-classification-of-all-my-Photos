@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import shutil
@@ -26,50 +27,35 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "source": "./photos",
     "output": "./sorted",
     "operation": "copy",
-    "categories": [
-        "nature",
-        "birds",
-        "street photography",
-        "family",
-        "portraits",
-        "architecture",
-        "food",
-        "events",
-    ],
     "ollama": {
         "url": "http://localhost:11434",
         "model": "gemma4",
         "timeout_seconds": 120,
     },
-    "classification_prompt": (
-        "You are an advanced image classification model specialized in semantic pattern recognition. "
-        "Analyze the image carefully and choose exactly one category from this list: {categories}. "
-        "Only respond with the category name. "
-        "If you are not at least 85% confident, respond with 'uncategorized'. "
-        "If the image contains multiple patterns, choose the most prominent one. "
-        "Be strict and avoid guessing. "
-        "Confidence: Output the category name, then a pipe '|', then the confidence as a percentage (e.g., 'nature|92')."
+    "description_prompt": (
+        "Eres un modelo de visión que crea descripciones semánticas útiles para búsqueda. "
+        "Describe la escena en español en 1 o 2 frases y genera una lista corta de etiquetas."
     ),
+    "description": {
+        "fallback_text": "descripcion no disponible",
+        "require_json": True,
+    },
+    "description_output": "descriptions.jsonl",
     "preprocessing": {
         "max_side": 1024,
         "jpeg_quality": 85,
-    },
-    "classification": {
-        "min_confidence": 0.85,
-        "fallback_category": "uncategorized",
-        "require_confidence_format": True,
     },
 }
 
 
 @dataclass
 class Summary:
-    counts: dict[str, int]
     total_images: int
     skipped_images: int
     total_seconds: float
     avg_original_size: float
     avg_payload_size: float
+    description_log_path: Path
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
@@ -77,7 +63,7 @@ def load_config(config_path: Path) -> dict[str, Any]:
         **DEFAULT_CONFIG,
         "ollama": dict(DEFAULT_CONFIG["ollama"]),
         "preprocessing": dict(DEFAULT_CONFIG["preprocessing"]),
-        "classification": dict(DEFAULT_CONFIG["classification"]),
+        "description": dict(DEFAULT_CONFIG["description"]),
     }
 
     if config_path.exists():
@@ -89,30 +75,21 @@ def load_config(config_path: Path) -> dict[str, Any]:
             else:
                 config[key] = value
 
-    if not config.get("categories"):
-        raise ValueError("Config must define at least one category")
-
-    config["categories"] = [str(c).strip() for c in config["categories"] if str(c).strip()]
-    if not config["categories"]:
-        raise ValueError("Config categories are empty")
-
     operation = str(config.get("operation", "copy")).lower()
     if operation not in {"copy", "move"}:
         raise ValueError("operation must be 'copy' or 'move'")
     config["operation"] = operation
 
-    min_confidence = float(config["classification"].get("min_confidence", 0.85))
-    if min_confidence < 0 or min_confidence > 1:
-        raise ValueError("classification.min_confidence must be between 0 and 1")
-    config["classification"]["min_confidence"] = min_confidence
+    fallback_text = str(config["description"].get("fallback_text", "descripcion no disponible")).strip()
+    if not fallback_text:
+        raise ValueError("description.fallback_text cannot be empty")
+    config["description"]["fallback_text"] = fallback_text
+    config["description"]["require_json"] = bool(config["description"].get("require_json", True))
 
-    fallback_category = str(config["classification"].get("fallback_category", "uncategorized")).strip()
-    if not fallback_category:
-        raise ValueError("classification.fallback_category cannot be empty")
-    config["classification"]["fallback_category"] = fallback_category
-    config["classification"]["require_confidence_format"] = bool(
-        config["classification"].get("require_confidence_format", True)
-    )
+    description_output = str(config.get("description_output", "descriptions.jsonl")).strip()
+    if not description_output:
+        raise ValueError("description_output cannot be empty")
+    config["description_output"] = description_output
 
     return config
 
@@ -154,78 +131,79 @@ def preprocess_image_for_inference(
     return payload_b64, original_size, len(payload_bytes)
 
 
-def extract_category(
+def _extract_json_payload(response_text: str) -> dict[str, Any] | None:
+    if not response_text:
+        return None
+    raw = response_text.strip()
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    candidate = raw[start : end + 1]
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_tags(tags: object) -> list[str]:
+    if isinstance(tags, str):
+        parts = re.split(r"[,;]", tags)
+        cleaned = [part.strip() for part in parts if part.strip()]
+        return cleaned
+    if isinstance(tags, list):
+        cleaned = [str(tag).strip() for tag in tags if str(tag).strip()]
+        return cleaned
+    return []
+
+
+def extract_description(
     response_text: str,
-    categories: list[str],
     *,
-    min_confidence: float = 0.85,
-    fallback_category: str = "uncategorized",
-    require_confidence_format: bool = True,
-) -> str:
-    """
-    Extrae la categoría y la confianza del texto de respuesta. Si la confianza es menor al umbral, retorna 'uncategorized'.
-    """
-    normalized_categories = {re.sub(r"\s+", " ", c.lower().strip()): c for c in categories}
-    normalized_fallback = fallback_category.strip() or "uncategorized"
-
-    # Buscar formato: categoria|porcentaje
-    match = re.search(r"([a-zA-Z0-9 _-]+)\s*\|\s*(\d{1,3})", response_text.strip())
-    if match:
-        cat_raw, conf_raw = match.groups()
-        try:
-            confidence = int(conf_raw) / 100.0
-        except Exception:
-            confidence = 0.0
-        normalized = cat_raw.lower().strip()
-        if normalized in normalized_categories and confidence >= min_confidence:
-            return normalized_categories[normalized]
-        return normalized_fallback
-
-    if require_confidence_format:
-        return normalized_fallback
-
-    # Fallback: comportamiento anterior
-    normalized_response = response_text.lower().strip()
-    normalized_response = re.sub(r"[^a-z0-9\s]", " ", normalized_response)
-    normalized_response = re.sub(r"\s+", " ", normalized_response).strip()
-    if normalized_response in normalized_categories:
-        return normalized_categories[normalized_response]
-    for normalized, original in normalized_categories.items():
-        pattern = rf"\b{re.escape(normalized)}\b"
-        if re.search(pattern, normalized_response):
-            return original
-    first_word = normalized_response.split(" ")[0] if normalized_response else ""
-    for normalized, original in normalized_categories.items():
-        if normalized.split(" ")[0] == first_word and first_word:
-            return original
-    return normalized_fallback
+    fallback_text: str = "descripcion no disponible",
+    require_json: bool = True,
+) -> tuple[str, list[str]]:
+    parsed = _extract_json_payload(response_text)
+    if parsed is not None:
+        description = str(parsed.get("description", "")).strip()
+        tags = _normalize_tags(parsed.get("tags", []))
+        if description:
+            return description, tags
+        return fallback_text, tags
+    if require_json:
+        return fallback_text, []
+    description = response_text.strip()
+    return (description if description else fallback_text), []
 
 
-def _build_effective_prompt(prompt_template: str, categories: list[str], fallback_category: str) -> str:
-    category_list = ", ".join(categories)
-    base_prompt = prompt_template.format(categories=category_list).strip()
+def _build_effective_prompt(prompt_template: str) -> str:
+    base_prompt = prompt_template.strip()
     contract_instructions = (
-        "\n\nOutput contract (strict): reply with exactly one line in this format: "
-        "<category>|<confidence_0_to_100>. "
-        f"If confidence is low, use {fallback_category}|<confidence>. "
+        "\n\nOutput contract (strict): return a single JSON object in one line with keys "
+        '"description" (string) and "tags" (array of strings). '
         "Do not add explanations or extra text."
     )
     return f"{base_prompt}{contract_instructions}"
 
 
-def classify_with_ollama(
+def describe_with_ollama(
     payload_b64: str,
-    categories: list[str],
     prompt_template: str,
     ollama_url: str,
     model: str,
     timeout_seconds: int,
-    min_confidence: float = 0.85,
-    fallback_category: str = "uncategorized",
-    require_confidence_format: bool = True,
-) -> tuple[str, str]:
-    """Returns (category, raw_response) tuple. Raises OllamaError on connection issues."""
-    prompt = _build_effective_prompt(prompt_template, categories, fallback_category)
+    fallback_text: str = "descripcion no disponible",
+    require_json: bool = True,
+) -> tuple[str, list[str], str]:
+    """Returns (description, tags, raw_response) tuple. Raises OllamaError on connection issues."""
+    prompt = _build_effective_prompt(prompt_template)
     try:
         response = requests.post(
             f"{ollama_url.rstrip('/')}/api/generate",
@@ -247,14 +225,12 @@ def classify_with_ollama(
         raise OllamaError(f"Error en API de Ollama: {exc}") from exc
 
     output = response.json().get("response", "")
-    category = extract_category(
+    description, tags = extract_description(
         str(output),
-        categories,
-        min_confidence=min_confidence,
-        fallback_category=fallback_category,
-        require_confidence_format=require_confidence_format,
+        fallback_text=fallback_text,
+        require_json=require_json,
     )
-    return category, str(output).strip()
+    return description, tags, str(output).strip()
 
 
 def _configure_error_logger(log_file: Path) -> logging.Logger:
@@ -267,47 +243,43 @@ def _configure_error_logger(log_file: Path) -> logging.Logger:
     return logger
 
 
-def _load_history_index(history_log_path: Path) -> dict[str, str]:
-    history_index: dict[str, str] = {}
-    if not history_log_path.exists():
-        return history_index
+def _load_description_index(description_log_path: Path) -> set[str]:
+    description_index: set[str] = set()
+    if not description_log_path.exists():
+        return description_index
 
-    with history_log_path.open("r", encoding="utf-8") as history_file:
+    with description_log_path.open("r", encoding="utf-8") as history_file:
         for raw_line in history_file:
-            if "|" not in raw_line:
+            line = raw_line.strip()
+            if not line:
                 continue
-            filename, category = raw_line.split("|", maxsplit=1)
-            normalized_name = filename.strip()
-            normalized_category = category.strip()
-            if normalized_name:
-                history_index[normalized_name.casefold()] = normalized_category
-    return history_index
+            if line.lstrip().startswith("{"):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = str(record.get("relative_path") or record.get("filename") or "").strip()
+                if key:
+                    description_index.add(key.casefold())
+                continue
+            if "|" in line:
+                filename, _ = line.split("|", maxsplit=1)
+                normalized_name = filename.strip()
+                if normalized_name:
+                    description_index.add(normalized_name.casefold())
+    return description_index
 
 
-def _append_history_entry(history_log_path: Path, filename: str, category: str) -> None:
-    history_log_path.parent.mkdir(parents=True, exist_ok=True)
-    with history_log_path.open("a", encoding="utf-8") as history_file:
-        history_file.write(f"{filename} | {category}\n")
-
-
-def postprocess_category(category: str, image_path: Path, categories: list[str]) -> str:
-    """
-    Postproceso simple: si la categoría es 'uncategorized', intentar heurística por nombre de archivo.
-    """
-    if category != "uncategorized":
-        return category
-    # Ejemplo: si el nombre del archivo contiene una categoría, usarla
-    filename = image_path.stem.lower()
-    for cat in categories:
-        if cat.lower() in filename:
-            return cat
-    return category
+def _append_description_entry(description_log_path: Path, record: dict[str, Any]) -> None:
+    description_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with description_log_path.open("a", encoding="utf-8") as history_file:
+        history_file.write(json.dumps(record, ensure_ascii=False))
+        history_file.write("\n")
 
 def process_images(
     *,
     source: Path,
     output: Path,
-    categories: list[str],
     operation: str,
     max_side: int,
     jpeg_quality: int,
@@ -316,24 +288,18 @@ def process_images(
     model: str,
     timeout_seconds: int,
     dry_run: bool,
-    min_confidence: float = 0.85,
-    fallback_category: str = "uncategorized",
-    require_confidence_format: bool = True,
-    history_log_path: Path | None = None,
+    fallback_text: str = "descripcion no disponible",
+    require_json: bool = True,
+    description_log_path: Path | None = None,
 ) -> Summary:
     source.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
 
-    output_categories = list(dict.fromkeys(categories + [fallback_category]))
-    for category in output_categories:
-        (output / category).mkdir(parents=True, exist_ok=True)
-
     errors_logger = _configure_error_logger(output / "errors.log")
-    effective_history_log_path = history_log_path or (source.parent / "history.log")
-    history_index = _load_history_index(effective_history_log_path)
+    effective_description_log_path = description_log_path or (output / "descriptions.jsonl")
+    description_index = _load_description_index(effective_description_log_path)
 
     images = list_images(source)
-    counts: dict[str, int] = {category: 0 for category in output_categories}
     total_original_size = 0
     total_payload_size = 0
     skipped_images = 0
@@ -343,17 +309,19 @@ def process_images(
 
 
     for image_path in images:
-        image_key = image_path.name.casefold()
-        if image_key in history_index:
+        relative_path = image_path.relative_to(source)
+        image_key = str(relative_path).casefold()
+        filename_key = image_path.name.casefold()
+        if image_key in description_index or filename_key in description_index:
             skipped_images += 1
             print(
-                f"{image_path.name} | skipped=history | category={history_index[image_key]} "
-                f"| processing_seconds=0.00"
+                f"{image_path.name} | skipped=description_log | processing_seconds=0.00"
             )
             continue
 
         image_started = time.perf_counter()
-        category = "uncategorized"
+        description = fallback_text
+        tags: list[str] = []
         raw_response = ""
         ollama_error: OllamaError | None = None
         try:
@@ -363,16 +331,14 @@ def process_images(
                 jpeg_quality=jpeg_quality,
             )
             try:
-                category, raw_response = classify_with_ollama(
+                description, tags, raw_response = describe_with_ollama(
                     payload_b64,
-                    categories,
                     prompt_template,
                     ollama_url,
                     model,
                     timeout_seconds,
-                    min_confidence=min_confidence,
-                    fallback_category=fallback_category,
-                    require_confidence_format=require_confidence_format,
+                    fallback_text=fallback_text,
+                    require_json=require_json,
                 )
             except OllamaError as exc:
                 ollama_error = exc
@@ -387,13 +353,7 @@ def process_images(
         total_original_size += original_size
         total_payload_size += payload_size
 
-        # Postproceso para mejorar la calidad de la clasificación
-        category = postprocess_category(category, image_path, categories)
-
-        if category not in output_categories:
-            category = fallback_category
-
-        destination = output / category / image_path.name
+        destination = output / relative_path
         image_seconds = time.perf_counter() - image_started
 
         if ollama_error:
@@ -403,25 +363,37 @@ def process_images(
         else:
             print(
                 f"{image_path.name} | original_size={original_size} bytes "
-                f"| payload_size={payload_size} bytes | category={category} "
-                f"| gemma4_response={raw_response} "
+                f"| payload_size={payload_size} bytes | description={description} "
+                f"| tags={', '.join(tags)} | gemma4_response={raw_response} "
                 f"| processing_seconds={image_seconds:.2f} "
                 f"| destination={destination}"
             )
 
-        counts[category] += 1
         processed_images += 1
         if dry_run:
             continue
 
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if operation == "move":
             shutil.move(str(image_path), str(destination))
         else:
             shutil.copy2(image_path, destination)
 
         if not ollama_error:
-            _append_history_entry(effective_history_log_path, image_path.name, category)
-            history_index[image_key] = category
+            _append_description_entry(
+                effective_description_log_path,
+                {
+                    "filename": image_path.name,
+                    "relative_path": str(relative_path),
+                    "source_path": str(image_path),
+                    "output_path": str(destination),
+                    "description": description,
+                    "tags": tags,
+                    "raw_response": raw_response,
+                },
+            )
+            description_index.add(image_key)
+            description_index.add(filename_key)
 
     total_seconds = time.perf_counter() - started
     total_images = processed_images
@@ -430,10 +402,10 @@ def process_images(
     avg_payload_size = (total_payload_size / total_images) if total_images else 0.0
 
     return Summary(
-        counts=counts,
         total_images=total_images,
         skipped_images=skipped_images,
         total_seconds=total_seconds,
         avg_original_size=avg_original_size,
         avg_payload_size=avg_payload_size,
+        description_log_path=effective_description_log_path,
     )
