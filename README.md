@@ -1,6 +1,6 @@
 # Pipeline-of-semantic-classification-of-all-my-Photos
 
-Local photo organization pipeline using Gemma 3 through Ollama.
+Local photo organization pipeline using Gemma4 through Ollama.
 
 ## Features
 
@@ -29,9 +29,9 @@ Local photo organization pipeline using Gemma 3 through Ollama.
    ```bash
    ollama serve
    ```
-3. Pull Gemma 3:
+3. Pull Gemma4:
    ```bash
-   ollama pull gemma3
+   ollama pull gemma4
    ```
 
 ## Python setup
@@ -54,6 +54,43 @@ Edit `config.yaml` to customize:
 - `description_prompt` (prompt for semantic descriptions)
 - `description.fallback_text` and `description.require_json`
 - `description_output` (file name for the JSONL log)
+
+## Nuevas funciones: indexación y búsqueda
+
+- Indexado local: el pipeline ahora genera un índice SQLite embebido (`index.db`) dentro de la carpeta `output`.
+- Resúmenes por foto enriquecidos: cada entrada en `descriptions.jsonl` contiene ahora campos adicionales (estructurados) para facilitar búsquedas:
+   - `entities` (personas, objetos, lugares, actividades)
+   - `scene_attributes` (lighting, weather, colors, time_of_day)
+   - `searchable_description` (frase corta optimizada para recuperación)
+- Búsqueda semántica: `main.py` ofrece un comando `search` que combina búsqueda textual (SQLite FTS5) con un re-ranking semántico vía Gemma4.
+
+## Nuevos comandos CLI
+
+- Ingest / procesado (mantiene la interfaz anterior):
+
+```bash
+python main.py --source ./photos --output ./sorted
+```
+
+- Rebuild index (reconstruye `index.db` a partir de `descriptions.jsonl`):
+
+```bash
+python main.py rebuild-index
+```
+
+- Search (texto; opción semántica con Gemma4):
+
+```bash
+python main.py search "retratos de mujeres al atardecer con el mar de fondo" --semantic
+```
+
+La búsqueda sin `--semantic` usa FTS5 para rapidez; con `--semantic` se añade un re-ranking por similitud usando Gemma4 a través de Ollama.
+
+## Prompt y contrato para Gemma4
+
+El prompt enviado a Gemma4 solicita ahora una salida JSON estricta y estructurada (una sola línea) que incluye `description`, `tags`, `entities`, `scene_attributes` y `searchable_description`. Esto mejora la precisión de las búsquedas en lenguaje natural y permite realizar re-rankings semánticos.
+
+Ejemplo (interno): el prompt exige "NO añadir texto adicional, sólo un JSON válido en una línea" para preservar la compatibilidad con el parser del pipeline.
 
 ## Run
 

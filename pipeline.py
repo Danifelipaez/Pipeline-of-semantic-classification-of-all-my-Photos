@@ -186,11 +186,19 @@ def extract_description(
 
 def _build_effective_prompt(prompt_template: str) -> str:
     base_prompt = prompt_template.strip()
+    # Enhanced contract: include structured fields useful for search and ranking.
+    # Keep backward compatibility with `description` and `tags` keys.
     contract_instructions = (
-        "\n\nOutput contract (strict): return a single JSON object in one line with keys "
-        '"description" (string) and "tags" (array of strings). '
-        "Do not add explanations or extra text."
-    )
+        "\n\n Output contract (strict): Return a single JSON object in one line (no extra text).
+        The object MUST include the following keys:
+        - \"description\": a 2-4 sentence human-readable description in Spanish (observable facts only).
+        - \"tags\": an array of short keyword tags (5-8 items) useful for faceted search.
+        - \"entities\": an object with arrays: \"people\", \"objects\", \"locations\", \"activities\" (each may be empty).
+        - \"scene_attributes\": an object with keys: \"lighting\" (natural/artificial/mixed), \"weather\", \"colors\" (array), \"time_of_day\".
+        - \"searchable_description\": a concise (1 sentence) keyword-rich sentence optimized for exact-match and semantic retrieval.
+        Additionally, you may include \"raw_response\" for debugging.
+        Do NOT add any explanation, examples, or extra text—only the single-line JSON object."
+            )
     return f"{base_prompt}{contract_instructions}"
 
 
