@@ -1,6 +1,4 @@
 source: D:\Camara\a6400\
-output: D:\Camara\OrganizacionSemantica
-operation: copy
 
 ollama:
   url: http://localhost:11434

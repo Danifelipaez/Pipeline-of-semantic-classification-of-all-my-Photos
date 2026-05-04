@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import typer
 
-from pipeline import load_config
+from pipeline import load_config, process_images
 from pipeline.application.ingest_service import ingest_and_index
 from pipeline.application.index_service import IndexService
 from pipeline.infrastructure.ollama_client import OllamaClient
@@ -13,22 +13,18 @@ from pipeline.domain.models import PhotoRecord
 
 def main(
     source: Path | None = typer.Option(None, help="Path to source photos folder"),
-    output: Path | None = typer.Option(None, help="Path to output folder"),
     config: Path = typer.Option(Path("config.yaml"), help="Path to config.yaml"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Classify without moving/copying files"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Classify without writing descriptions"),
 ) -> None:
     loaded = load_config(config)
 
     source_path = Path(source) if source is not None else Path(loaded["source"])
-    output_path = Path(output) if output is not None else Path(loaded["output"])
     description_log_path = Path(loaded["description_output"])
     if not description_log_path.is_absolute():
-        description_log_path = output_path / description_log_path
+        description_log_path = source_path / description_log_path
 
     summary = process_images(
         source=source_path,
-        output=output_path,
-        operation=loaded["operation"],
         max_side=int(loaded["preprocessing"]["max_side"]),
         jpeg_quality=int(loaded["preprocessing"]["jpeg_quality"]),
         prompt_template=str(loaded["description_prompt"]),
@@ -49,11 +45,9 @@ def main(
     typer.echo(f"Average inference payload size (bytes): {summary.avg_payload_size:.2f}")
     typer.echo(f"Description log: {summary.description_log_path}")
     # after processing, index into SQLite
-    db_path = output_path / "index.db"
+    db_path = source_path / "index.db"
     ingest_and_index(
         source=source_path,
-        output=output_path,
-        operation=loaded["operation"],
         max_side=int(loaded["preprocessing"]["max_side"]),
         jpeg_quality=int(loaded["preprocessing"]["jpeg_quality"]),
         prompt_template=str(loaded["description_prompt"]),
@@ -72,14 +66,14 @@ def rebuild_index(
     config: Path = typer.Option(Path("config.yaml"), help="Path to config.yaml"),
 ):
     loaded = load_config(config)
-    output_path = Path(loaded["output"]) if loaded.get("output") else Path(loaded["output"])
-    db_path = output_path / "index.db"
+    source_path = Path(loaded["source"])
+    db_path = source_path / "index.db"
     ollama = OllamaClient(loaded["ollama"]["url"], loaded["ollama"]["model"], int(loaded["ollama"]["timeout_seconds"]))
     index = IndexService(db_path)
     # rebuild by reading descriptions.jsonl
     description_log = Path(loaded.get("description_output", "descriptions.jsonl"))
     if not description_log.is_absolute():
-        description_log = output_path / description_log
+        description_log = source_path / description_log
     if not description_log.exists():
         typer.echo("No description log found to index.")
         raise typer.Exit(code=1)
@@ -115,8 +109,8 @@ def search(
     limit: int = typer.Option(20, help="Límite de resultados"),
 ):
     loaded = load_config(config)
-    output_path = Path(loaded["output"]) if loaded.get("output") else Path(loaded["output"])
-    db_path = output_path / "index.db"
+    source_path = Path(loaded["source"])
+    db_path = source_path / "index.db"
     ollama = OllamaClient(loaded["ollama"]["url"], loaded["ollama"]["model"], int(loaded["ollama"]["timeout_seconds"]))
     searchsvc = SearchService(db_path, ollama)
     candidates = searchsvc.text_search(query, limit=limit)

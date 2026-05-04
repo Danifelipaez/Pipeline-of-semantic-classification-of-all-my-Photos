@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable, List
+from typing import List
 
 from ..domain.models import PhotoRecord
-from ..infrastructure.ollama_client import OllamaClient
 from ..infrastructure.persistence import Persistence
-from ..index_service import IndexService  # relative import adjusted when used from main
 
 
 def ingest_and_index(
     *,
     source: Path,
-    output: Path,
-    operation: str,
     max_side: int,
     jpeg_quality: int,
     prompt_template: str,
@@ -32,8 +28,6 @@ def ingest_and_index(
     from pipeline import process_images
     summary = process_images(
         source=source,
-        output=output,
-        operation=operation,
         max_side=max_side,
         jpeg_quality=jpeg_quality,
         prompt_template=prompt_template,

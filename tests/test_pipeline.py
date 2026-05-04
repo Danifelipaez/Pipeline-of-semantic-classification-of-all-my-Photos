@@ -149,7 +149,6 @@ def test_process_images_dry_run_keeps_source_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
-    output = tmp_path / "output"
     description_log = tmp_path / "descriptions.jsonl"
     source.mkdir()
 
@@ -163,8 +162,6 @@ def test_process_images_dry_run_keeps_source_files(
 
     summary = process_images(
         source=source,
-        output=output,
-        operation="copy",
         max_side=1024,
         jpeg_quality=85,
         prompt_template="Describe",
@@ -178,7 +175,6 @@ def test_process_images_dry_run_keeps_source_files(
     )
 
     assert image_path.exists()
-    assert not (output / "img.jpg").exists()
     assert not description_log.exists()
     assert summary.total_images == 1
 
@@ -187,7 +183,6 @@ def test_process_images_description_failure_uses_fallback_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
-    output = tmp_path / "output"
     description_log = tmp_path / "descriptions.jsonl"
     source.mkdir()
 
@@ -201,8 +196,6 @@ def test_process_images_description_failure_uses_fallback_text(
 
     summary = process_images(
         source=source,
-        output=output,
-        operation="copy",
         max_side=1024,
         jpeg_quality=85,
         prompt_template="Describe",
@@ -215,9 +208,9 @@ def test_process_images_description_failure_uses_fallback_text(
         description_log_path=description_log,
     )
 
-    assert (output / "img.jpg").exists()
+    assert image_path.exists()
     assert summary.total_images == 1
-    assert "description failed" in (output / "errors.log").read_text(encoding="utf-8")
+    assert "description failed" in (source / "errors.log").read_text(encoding="utf-8")
     record = json.loads(description_log.read_text(encoding="utf-8").splitlines()[0])
     assert record["description"] == "sin descripcion"
 
@@ -226,7 +219,6 @@ def test_process_images_skips_files_from_description_log(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
-    output = tmp_path / "output"
     description_log = tmp_path / "descriptions.jsonl"
     source.mkdir()
 
@@ -244,8 +236,6 @@ def test_process_images_skips_files_from_description_log(
 
     summary = process_images(
         source=source,
-        output=output,
-        operation="copy",
         max_side=1024,
         jpeg_quality=85,
         prompt_template="Describe",
@@ -260,14 +250,13 @@ def test_process_images_skips_files_from_description_log(
 
     assert summary.total_images == 0
     assert summary.skipped_images == 1
-    assert not (output / "done.jpg").exists()
+    assert already_done.exists()
 
 
 def test_process_images_appends_to_description_log_after_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
-    output = tmp_path / "output"
     description_log = tmp_path / "descriptions.jsonl"
     source.mkdir()
 
@@ -281,8 +270,6 @@ def test_process_images_appends_to_description_log_after_success(
 
     summary = process_images(
         source=source,
-        output=output,
-        operation="copy",
         max_side=1024,
         jpeg_quality=85,
         prompt_template="Describe",
@@ -306,7 +293,6 @@ def test_process_images_does_not_add_to_description_log_on_ollama_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
     source = tmp_path / "source"
-    output = tmp_path / "output"
     description_log = tmp_path / "descriptions.jsonl"
     source.mkdir()
 
@@ -320,8 +306,6 @@ def test_process_images_does_not_add_to_description_log_on_ollama_error(
 
     summary = process_images(
         source=source,
-        output=output,
-        operation="copy",
         max_side=1024,
         jpeg_quality=85,
         prompt_template="Describe",

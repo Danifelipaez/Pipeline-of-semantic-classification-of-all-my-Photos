@@ -4,7 +4,6 @@ import base64
 import json
 import logging
 import re
-import shutil
 import time
 from dataclasses import dataclass
 from io import BytesIO
@@ -25,8 +24,6 @@ SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "source": "./photos",
-    "output": "./sorted",
-    "operation": "copy",
     "ollama": {
         "url": "http://localhost:11434",
         "model": "gemma4",
@@ -74,11 +71,6 @@ def load_config(config_path: Path) -> dict[str, Any]:
                 config[key].update(value)
             else:
                 config[key] = value
-
-    operation = str(config.get("operation", "copy")).lower()
-    if operation not in {"copy", "move"}:
-        raise ValueError("operation must be 'copy' or 'move'")
-    config["operation"] = operation
 
     fallback_text = str(config["description"].get("fallback_text", "descripcion no disponible")).strip()
     if not fallback_text:
@@ -189,16 +181,16 @@ def _build_effective_prompt(prompt_template: str) -> str:
     # Enhanced contract: include structured fields useful for search and ranking.
     # Keep backward compatibility with `description` and `tags` keys.
     contract_instructions = (
-        "\n\n Output contract (strict): Return a single JSON object in one line (no extra text).
-        The object MUST include the following keys:
-        - \"description\": a 2-4 sentence human-readable description in Spanish (observable facts only).
-        - \"tags\": an array of short keyword tags (5-8 items) useful for faceted search.
-        - \"entities\": an object with arrays: \"people\", \"objects\", \"locations\", \"activities\" (each may be empty).
-        - \"scene_attributes\": an object with keys: \"lighting\" (natural/artificial/mixed), \"weather\", \"colors\" (array), \"time_of_day\".
-        - \"searchable_description\": a concise (1 sentence) keyword-rich sentence optimized for exact-match and semantic retrieval.
-        Additionally, you may include \"raw_response\" for debugging.
-        Do NOT add any explanation, examples, or extra text—only the single-line JSON object."
-            )
+        "\n\nOutput contract (strict): Return a single JSON object in one line (no extra text)."
+        " The object MUST include the following keys:"
+        " - \"description\": a 2-4 sentence human-readable description in Spanish (observable facts only)."
+        " - \"tags\": an array of short keyword tags (5-8 items) useful for faceted search."
+        " - \"entities\": an object with arrays: \"people\", \"objects\", \"locations\", \"activities\" (each may be empty)."
+        " - \"scene_attributes\": an object with keys: \"lighting\" (natural/artificial/mixed), \"weather\", \"colors\" (array), \"time_of_day\"."
+        " - \"searchable_description\": a concise (1 sentence) keyword-rich sentence optimized for exact-match and semantic retrieval."
+        " Additionally, you may include \"raw_response\" for debugging."
+        " Do NOT add any explanation, examples, or extra text; only the single-line JSON object."
+    )
     return f"{base_prompt}{contract_instructions}"
 
 
@@ -293,8 +285,6 @@ def _description_keys(relative_path: Path, filename: str) -> tuple[str, str]:
 def process_images(
     *,
     source: Path,
-    output: Path,
-    operation: str,
     max_side: int,
     jpeg_quality: int,
     prompt_template: str,
@@ -305,12 +295,13 @@ def process_images(
     fallback_text: str = "descripcion no disponible",
     require_json: bool = True,
     description_log_path: Path | None = None,
+    output: Path | None = None,
+    operation: str = "copy",
 ) -> Summary:
     source.mkdir(parents=True, exist_ok=True)
-    output.mkdir(parents=True, exist_ok=True)
 
-    errors_logger = _configure_error_logger(output / "errors.log")
-    effective_description_log_path = description_log_path or (output / "descriptions.jsonl")
+    errors_logger = _configure_error_logger(source / "errors.log")
+    effective_description_log_path = description_log_path or (source / "descriptions.jsonl")
     description_index = _load_description_index(effective_description_log_path)
 
     images = list_images(source)
@@ -366,7 +357,6 @@ def process_images(
         total_original_size += original_size
         total_payload_size += payload_size
 
-        destination = output / relative_path
         image_seconds = time.perf_counter() - image_started
 
         if ollama_error:
@@ -379,18 +369,12 @@ def process_images(
                 f"| payload_size={payload_size} bytes | description={description} "
                 f"| tags={', '.join(tags)} | gemma4_response={raw_response} "
                 f"| processing_seconds={image_seconds:.2f} "
-                f"| destination={destination}"
+                f"| source_path={image_path}"
             )
 
         processed_images += 1
         if dry_run:
             continue
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if operation == "move":
-            shutil.move(str(image_path), str(destination))
-        else:
-            shutil.copy2(image_path, destination)
 
         if not ollama_error:
             _append_description_entry(
@@ -399,7 +383,7 @@ def process_images(
                     "filename": image_path.name,
                     "relative_path": str(relative_path),
                     "source_path": str(image_path),
-                    "output_path": str(destination),
+                    "output_path": str(image_path),
                     "description": description,
                     "tags": tags,
                     "raw_response": raw_response,
