@@ -125,7 +125,12 @@ def search(
 
 if __name__ == "__main__":
     app = typer.Typer()
-    app.command()(main)
-    app.command()(rebuild_index)
-    app.command()(search)
+    
+    # Register commands
+    app.command(name="rebuild-index")(rebuild_index)
+    app.command(name="search")(search)
+    
+    # Set main as the default callback (runs when no command is specified)
+    app.callback(invoke_without_command=True)(main)
+    
     app()
